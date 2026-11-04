@@ -32,6 +32,33 @@ const ROOMS = {
   entree:    { cam: 'CAM 7', name: "L'Entrée" }
 };
 const ROOM_ORDER = ['stage', 'banquet', 'cuisine', 'vestiaire', 'entree', 'couloirO', 'couloirE'];
+const KEYMAP = { stage: 1, banquet: 2, couloirO: 3, couloirE: 4, cuisine: 5, vestiaire: 6, entree: 7 };
+
+// Plan du musée pour la carte des caméras
+const MAP = {
+  stage:     { x: 120, y: 100, w: 110, h: 52 },
+  banquet:   { x: 120, y: 168, w: 110, h: 52 },
+  cuisine:   { x: 20,  y: 250, w: 90,  h: 52 },
+  entree:    { x: 125, y: 250, w: 100, h: 52 },
+  vestiaire: { x: 240, y: 250, w: 90,  h: 52 },
+  couloirO:  { x: 20,  y: 330, w: 135, h: 52 },
+  couloirE:  { x: 205, y: 330, w: 125, h: 52 },
+  office:    { x: 125, y: 415, w: 100, h: 60 }
+};
+const MAP_EDGES = [
+  ['stage', 'banquet'], ['stage', 'entree'], ['banquet', 'couloirO'],
+  ['entree', 'couloirE'], ['cuisine', 'couloirE'], ['vestiaire', 'couloirO'],
+  ['vestiaire', 'couloirE'], ['couloirO', 'office'], ['couloirE', 'office']
+];
+
+const HINTS = [
+  "Astuce : ouvre les caméras (C) — la carte montre en direct où sont les statues.",
+  "Astuce : la lumière (Z/E) révèle qui rode à une porte.",
+  "Astuce : chauffage (R/F) = cire lente, mais la batterie fond plus vite.",
+  "Astuce : chalumeau (X/V) renvoie une statue 2 salles en arrière (charges limitées, 1 rechargée / 40 s).",
+  "Astuce : à 0% de batterie, tout s'éteint... ne sois pas dans le noir.",
+  "Une statue à une porte OUVERTE = jumpscare. Ferme à temps (A/D) !"
+];
 
 // Niveau d'agressivité (0-20) de chaque personnage, par heure de la nuit
 const AI_BY_HOUR = [1, 3, 5, 8, 11, 14];
@@ -307,19 +334,58 @@ function button(x, y, w, h, label, id, active, sub) {
   }
 }
 
+// HUD plus visible : grosse jauge ⚡, grosse horloge + pips de progression 12→6h
 function drawHUD() {
-  ctx.textAlign = 'left';
-  ctx.font = 'bold 18px monospace';
   const p = Math.ceil(G.power);
-  ctx.fillStyle = p > 50 ? '#7dff9a' : p > 20 ? '#ffc857' : '#ff5a5a';
-  ctx.fillText('⚡ ' + p + '%', 20, 32);
-  ctx.fillStyle = '#334';
-  ctx.fillRect(110, 18, 150, 14);
-  ctx.fillStyle = p > 50 ? '#2e7d4f' : p > 20 ? '#b8860b' : '#a02020';
-  ctx.fillRect(110, 18, 150 * (G.power / 100), 14);
+  const low = p <= 20 && !G.blackout;
+  const flash = low && Math.floor(performance.now() / 250) % 2 === 0;
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 24px monospace';
+  ctx.fillStyle = G.blackout ? '#ff2020' : flash ? '#ff2020' : p > 50 ? '#7dff9a' : p > 20 ? '#ffc857' : '#ff5a5a';
+  ctx.fillText('⚡', 18, 38);
+  ctx.fillStyle = '#1a2030';
+  ctx.fillRect(50, 20, 230, 22);
+  ctx.fillStyle = G.blackout ? '#a02020' : p > 50 ? '#2e7d4f' : p > 20 ? '#b8860b' : '#a02020';
+  ctx.fillRect(50, 20, 230 * (G.power / 100), 22);
+  ctx.strokeStyle = '#4a5878'; ctx.lineWidth = 2; ctx.strokeRect(50, 20, 230, 22);
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = G.blackout ? '#ff4040' : flash ? '#ff4040' : '#e8ecf5';
+  ctx.fillText(G.blackout ? 'BLACKOUT' : p + '%', 292, 38);
+
   ctx.textAlign = 'right';
+  ctx.font = 'bold 28px monospace';
   ctx.fillStyle = '#e8ecf5';
-  ctx.fillText(hourLabel() + '  ⏰', W - 20, 32);
+  ctx.fillText(hourLabel(), W - 20, 40);
+  // pips de progression de la nuit : 12 1 2 3 4 5
+  const labels = ['12', '1', '2', '3', '4', '5'];
+  for (let i = 0; i < 6; i++) {
+    const x = W - 20 - (6 - i) * 26, y = 50;
+    ctx.fillStyle = i <= G.hour ? '#2e7d4f' : '#1a2030';
+    ctx.fillRect(x, y, 22, 16);
+    ctx.strokeStyle = '#4a5878'; ctx.lineWidth = 1; ctx.strokeRect(x, y, 22, 16);
+    ctx.fillStyle = i <= G.hour ? '#eafff2' : '#667';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(labels[i], x + 11, y + 12);
+  }
+}
+
+// Bandeau d'alerte quand une statue est à une porte
+function drawAlerts(y) {
+  const alerts = G.chars.filter(c => c.atDoor);
+  if (!alerts.length) return;
+  if (Math.floor(performance.now() / 300) % 2 === 0) return;
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 18px monospace';
+  alerts.forEach((c, i) => {
+    const closed = G.doors[c.side].closed;
+    ctx.fillStyle = closed ? '#ffc857' : '#ff4040';
+    ctx.fillText(
+      (c.side === 'left' ? '⚠️ PORTE GAUCHE' : '⚠️ PORTE DROITE') +
+      (closed ? ' bloquée 🔒' : ' OUVERTE — ferme vite (' + (c.side === 'left' ? 'A' : 'D') + ') !'),
+      W / 2, y + i * 24
+    );
+  });
 }
 
 function drawDoorway(side) {
@@ -439,6 +505,18 @@ function drawOffice() {
   }
 
   drawHUD();
+  drawAlerts(210);
+
+  // barre d'astuces contextuelles
+  const hint = HINTS[Math.floor(G.elapsed / 8) % HINTS.length];
+  ctx.fillStyle = 'rgba(10,14,24,0.9)';
+  ctx.fillRect(120, 474, 720, 32);
+  ctx.strokeStyle = '#2a3350';
+  ctx.strokeRect(120, 474, 720, 32);
+  ctx.fillStyle = '#8fa0c0';
+  ctx.font = '13px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(hint, W / 2, 495);
 
   ctx.fillStyle = '#0a0c12';
   ctx.fillRect(0, 512, W, 88);
@@ -455,18 +533,80 @@ function drawOffice() {
   ctx.fillStyle = '#10141f'; ctx.fillRect(220, 566, 125, 30);
   ctx.strokeStyle = '#4a5878'; ctx.lineWidth = 2; ctx.strokeRect(220, 566, 125, 30);
   ctx.fillStyle = G.temp >= 70 ? '#ff9a5a' : '#cfd8ea';
-  ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
-  ctx.fillText('🌡️ ' + G.temp + '°C', 282, 586);
+  ctx.font = 'bold 15px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('🌡️ ' + G.temp + '°C', 282, 587);
   button(355, 566, 55, 30, '+', 'tempUp', false, 'R');
   G.btns.push({ x: 420, y: 566, w: 130, h: 30, id: 'torchInfo' });
   ctx.fillStyle = '#10141f'; ctx.fillRect(420, 566, 130, 30);
   ctx.strokeStyle = '#4a5878'; ctx.strokeRect(420, 566, 130, 30);
   ctx.fillStyle = torchReady ? '#ffb14a' : '#666a75';
-  ctx.font = 'bold 14px monospace';
-  ctx.fillText('🔥 cire x' + G.torch.charges + '/' + G.torch.max, 485, 586);
+  ctx.font = 'bold 15px monospace';
+  ctx.fillText('🔥 cire x' + G.torch.charges + '/' + G.torch.max, 485, 587);
   ctx.fillStyle = '#8fa0c0'; ctx.font = '11px monospace';
   ctx.fillText('chauffage : ralentit la cire, mais vide ⚡', 560, 586);
   button(800, 566, 140, 30, '🔥 CIRE D', 'torchR', torchReady, 'V');
+}
+
+// Carte du musée : les salles sont placées comme un vrai plan, avec les statues en direct
+function drawMap() {
+  ctx.fillStyle = '#0a0e18';
+  ctx.fillRect(10, 70, 330, 440);
+  ctx.strokeStyle = '#2a3350'; ctx.lineWidth = 2; ctx.strokeRect(10, 70, 330, 440);
+  ctx.fillStyle = '#9aa5c0'; ctx.font = 'bold 13px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('🗺️ CARTE DU MUSÉE — clique une salle', 175, 90);
+
+  ctx.strokeStyle = '#3a4560'; ctx.lineWidth = 3;
+  for (const [a, b] of MAP_EDGES) {
+    const A = MAP[a], B = MAP[b];
+    ctx.beginPath();
+    ctx.moveTo(A.x + A.w / 2, A.y + A.h / 2);
+    ctx.lineTo(B.x + B.w / 2, B.y + B.h / 2);
+    ctx.stroke();
+  }
+
+  const O = MAP.office;
+  ctx.fillStyle = '#12233a';
+  ctx.fillRect(O.x, O.y, O.w, O.h);
+  ctx.strokeStyle = '#4a7ab5'; ctx.lineWidth = 3; ctx.strokeRect(O.x, O.y, O.w, O.h);
+  ctx.fillStyle = '#cfe3ff'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('🛡️ BUREAU', O.x + O.w / 2, O.y + 24);
+  ctx.fillStyle = '#8fa0c0'; ctx.font = '10px monospace';
+  ctx.fillText('(toi)', O.x + O.w / 2, O.y + 40);
+  for (const s of ['left', 'right']) {
+    const dx = s === 'left' ? O.x : O.x + O.w;
+    ctx.fillStyle = G.doors[s].closed ? '#ff5a5a' : '#2e7d4f';
+    ctx.fillRect(dx - 3, O.y + O.h / 2 - 12, 6, 24);
+  }
+
+  const blink = Math.floor(performance.now() / 300) % 2 === 0;
+  for (const key of ROOM_ORDER) {
+    const r = ROOMS[key], m = MAP[key];
+    const here = G.chars.filter(c => (c.pos === key && !c.atDoor) || (c.atDoor && r.door === c.side));
+    const atDoor = here.some(c => c.atDoor);
+    const sel = G.camSel === key;
+    ctx.fillStyle = sel ? '#1e3a24' : '#131a2a';
+    ctx.fillRect(m.x, m.y, m.w, m.h);
+    ctx.lineWidth = sel ? 3 : 2;
+    ctx.strokeStyle = atDoor ? (blink ? '#ff4040' : '#801515') : sel ? '#7dffb0' : '#3a4560';
+    ctx.strokeRect(m.x, m.y, m.w, m.h);
+    G.btns.push({ x: m.x, y: m.y, w: m.w, h: m.h, id: 'cam:' + key });
+    ctx.fillStyle = sel ? '#eafff2' : '#cfd8ea';
+    ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(r.cam + ' · touche ' + KEYMAP[key], m.x + m.w / 2, m.y + 14);
+    ctx.font = '10px monospace';
+    ctx.fillText(r.name, m.x + m.w / 2, m.y + 27);
+    if (here.length) {
+      ctx.font = '20px serif'; ctx.textAlign = 'left';
+      here.slice(0, 3).forEach((c, i) => ctx.fillText(c.emoji, m.x + 6 + i * 24, m.y + m.h - 8));
+      if (atDoor) {
+        ctx.fillStyle = blink ? '#ff4040' : '#ffffff';
+        ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+        ctx.fillText('⚠️', m.x + m.w - 12, m.y + 15);
+      }
+    }
+  }
+  ctx.fillStyle = '#5a7a5a'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('bordure rouge clignotante + ⚠️ = statue à la porte !', 175, 500);
 }
 
 function drawCam() {
@@ -479,23 +619,10 @@ function drawCam() {
   ctx.fillStyle = '#39d353';
   ctx.fillText('● REC  SURVEILLANCE', 20, 32);
   drawHUD();
+  drawAlerts(58);
+  drawMap();
 
-  let y = 55;
-  for (const key of ROOM_ORDER) {
-    const r = ROOMS[key];
-    const has = G.chars.some(c => (c.pos === key && !c.atDoor) || (c.atDoor && r.door === c.side));
-    button(20, y, 235, 52, r.cam + ' — ' + r.name, 'cam:' + key, G.camSel === key, '');
-    if (has) {
-      ctx.fillStyle = Math.floor(performance.now() / 300) % 2 === 0 ? '#ff4040' : '#801515';
-      ctx.beginPath(); ctx.arc(243, y + 26, 7, 0, Math.PI * 2); ctx.fill();
-    }
-    y += 60;
-  }
-  ctx.fillStyle = '#5a7a5a';
-  ctx.font = '11px monospace';
-  ctx.fillText('Touches 1-7 : changer de caméra', 20, y + 10);
-
-  const fx = 275, fy = 55, fw = W - fx - 20, fh = H - 145;
+  const fx = 350, fy = 70, fw = W - fx - 20, fh = 420;
   ctx.fillStyle = '#000';
   ctx.fillRect(fx, fy, fw, fh);
   ctx.strokeStyle = '#2a4a2a';
@@ -503,36 +630,41 @@ function drawCam() {
   ctx.strokeRect(fx, fy, fw, fh);
 
   ctx.fillStyle = '#39d353';
-  ctx.font = 'bold 16px monospace';
+  ctx.font = 'bold 20px monospace';
   ctx.textAlign = 'left';
-  ctx.fillText('> ' + ROOMS[G.camSel].cam + ' : ' + ROOMS[G.camSel].name.toUpperCase(), fx + 12, fy + 28);
+  ctx.fillText('> ' + ROOMS[G.camSel].cam + ' : ' + ROOMS[G.camSel].name.toUpperCase(), fx + 14, fy + 30);
 
   const here = G.chars.filter(c => (c.pos === G.camSel && !c.atDoor) || (c.atDoor && ROOMS[G.camSel].door === c.side));
   if (here.length === 0) {
     ctx.fillStyle = '#1e5c2a';
-    ctx.font = '16px monospace';
+    ctx.font = '18px monospace';
     ctx.textAlign = 'center';
     ctx.fillText('... signal vide ...', fx + fw / 2, fy + fh / 2);
   } else {
     here.forEach((c, i) => {
-      const cx = fx + fw / 2 + (i - (here.length - 1) / 2) * 130;
-      ctx.font = '72px serif';
+      const cx = fx + fw / 2 + (i - (here.length - 1) / 2) * 160;
+      ctx.font = '90px serif';
       ctx.textAlign = 'center';
-      ctx.fillText(c.emoji, cx, fy + fh / 2 + 10);
+      ctx.fillText(c.emoji, cx, fy + fh / 2 + 20);
       ctx.fillStyle = c.color;
-      ctx.font = 'bold 14px monospace';
-      ctx.fillText(c.name, cx, fy + fh / 2 + 55);
+      ctx.font = 'bold 16px monospace';
+      ctx.fillText(c.name, cx, fy + fh / 2 + 70);
     });
   }
 
-  for (let i = 0; i < 300; i++) {
+  for (let i = 0; i < 400; i++) {
     ctx.fillStyle = 'rgba(255,255,255,' + (Math.random() * 0.07) + ')';
     ctx.fillRect(fx + Math.random() * fw, fy + Math.random() * fh, 2, 2);
   }
   ctx.fillStyle = 'rgba(0,0,0,0.25)';
   for (let yy = fy; yy < fy + fh; yy += 4) ctx.fillRect(fx, yy, fw, 2);
 
-  button(fx, fy + fh + 18, 220, 45, '▼ FERMER CAMÉRAS', 'camDown', false, 'C');
+  button(fx, fy + fh + 14, 240, 45, '▼ FERMER CAMÉRAS', 'camDown', false, 'C');
+  ctx.fillStyle = '#5a7a5a';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Touches 1-7 ou clic sur la carte pour changer de salle', fx + 260, fy + fh + 32);
+  ctx.fillText('Les emojis sur la carte = position des statues en direct', fx + 260, fy + fh + 50);
 }
 
 function drawMenu() {
@@ -547,14 +679,14 @@ function drawMenu() {
 
   ctx.textAlign = 'center';
   ctx.fillStyle = '#e8d9a0';
-  ctx.font = 'bold 40px monospace';
-  ctx.fillText('LA NUIT AU MUSÉE DE CIRE', W / 2, 70);
+  ctx.font = 'bold 34px monospace';
+  ctx.fillText('LA NUIT AU MUSÉE DE CIRE', W / 2, 52);
   ctx.fillStyle = '#9aa5c0';
-  ctx.font = '15px monospace';
-  ctx.fillText('Un fan game en UNE seule nuit : survive de 12 AM à 6 AM.', W / 2, 100);
-  ctx.fillText("Tu es le gardien de nuit. Les statues de cire... ne dorment pas.", W / 2, 122);
+  ctx.font = '14px monospace';
+  ctx.fillText('Un fan game en UNE seule nuit : survive de 12 AM à 6 AM.', W / 2, 76);
+  ctx.fillText("Tu es le gardien de nuit. Les statues de cire... ne dorment pas.", W / 2, 96);
 
-  ctx.font = '16px monospace';
+  ctx.font = '15px monospace';
   ctx.fillStyle = '#cfd8ea';
   const roster = [
     ['🎩', 'Napoléon', 'rapide, attaque par la porte GAUCHE'],
@@ -562,34 +694,44 @@ function drawMenu() {
     ['⚔️', "Jeanne d'Arc", 'surgit de la cuisine, porte DROITE'],
     ['🧑‍🔬', 'Einstein', 'imprévisible : les DEUX côtés']
   ];
-  let y = 165;
+  let y = 132;
   for (const [e, n, d] of roster) {
-    ctx.font = '26px serif';
+    ctx.font = '24px serif';
     ctx.textAlign = 'left';
     ctx.fillText(e, 250, y);
     ctx.fillStyle = '#e8ecf5';
-    ctx.font = 'bold 16px monospace';
-    ctx.fillText(n, 300, y);
+    ctx.font = 'bold 15px monospace';
+    ctx.fillText(n, 295, y);
     ctx.fillStyle = '#9aa5c0';
-    ctx.font = '13px monospace';
-    ctx.fillText('— ' + d, 300, y + 18);
-    y += 46;
+    ctx.font = '12px monospace';
+    ctx.fillText('— ' + d, 295, y + 16);
+    y += 40;
   }
 
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#8fa0c0';
+  ctx.fillStyle = '#e8d9a0';
+  ctx.font = 'bold 15px monospace';
+  ctx.fillText('— COMMENT JOUER —', W / 2, 300);
+  ctx.fillStyle = '#cfd8ea';
   ctx.font = '13px monospace';
-  ctx.fillText('A/Z/E/D : portes & lumières · C : caméras (1-7) · R/F : chauffage · X/V : chalumeau à cire · (ou clic souris)', W / 2, y + 20);
-  ctx.fillText('Surveille les CAM, ferme la bonne porte, vérifie avec la LUMIÈRE. Gère ta batterie ⚡ : à 0%, tout s\'éteint...', W / 2, y + 42);
+  ctx.fillText('1. 👀 CAMÉRAS (C) : la carte montre en direct où sont les statues (emoji sur une salle).', W / 2, 322);
+  ctx.fillText('2. 🚪 Si ⚠️ clignote sur un couloir : ferme la porte (A = gauche, D = droite).', W / 2, 342);
+  ctx.fillText('3. 💡 LUMIÈRE (Z/E) pour voir qui rode exactement à la porte.', W / 2, 362);
+  ctx.fillText('4. ⚡ Tout consomme de la batterie : à 0 %, blackout total...', W / 2, 382);
   ctx.fillStyle = '#ffb14a';
-  ctx.fillText('🌡️ MÉCANIQUE ORIGINALE — CHAUFFAGE (R/F) : plus il fait chaud, plus la cire est lente... mais la batterie fond vite.', W / 2, y + 64);
-  ctx.fillText('🔥 MÉCANIQUE ORIGINALE — CHALUMEAU (X/V) : charges limitées, renvoie une statue 2 salles en arrière et l\'étourdit 10s.', W / 2, y + 86);
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('🌡️ MÉCANIQUE ORIGINALE — CHAUFFAGE (R/F) : +chaud = cire plus lente, mais batterie qui fond vite.', W / 2, 408);
+  ctx.fillText('🔥 MÉCANIQUE ORIGINALE — CHALUMEAU (X/V) : charges limitées, renvoie une statue 2 salles en arrière + 10 s étourdie.', W / 2, 428);
+  ctx.fillStyle = '#8fa0c0';
+  ctx.font = '12px monospace';
+  ctx.fillText('A/Z/E/D portes & lumières · C caméras · 1-7 changer de salle · R/F chauffage · X/V chalumeau · ou clic souris', W / 2, 454);
+  ctx.fillText('Objectif : tenir de 12 AM à 6 AM. Bonne nuit, gardien. 🛡️', W / 2, 474);
 
-  button(W / 2 - 130, y + 108, 260, 55, '▶ COMMENCER LA NUIT', 'start', false, '');
+  button(W / 2 - 140, 498, 280, 52, '▶ COMMENCER LA NUIT', 'start', false, '');
 
   ctx.fillStyle = '#556';
   ctx.font = '11px monospace';
-  ctx.fillText('Fan game non affilié à FNAF / Five Nights at Freddy\'s. Personnages historiques originaux.', W / 2, H - 14);
+  ctx.fillText('Fan game non affilié à FNAF / Five Nights at Freddy\'s. Personnages historiques originaux.', W / 2, H - 12);
 }
 
 function drawJump() {
