@@ -18,9 +18,12 @@ Fan game jouable inspiré du concept "gardien de nuit" (type FNAF), en **une seu
 
 Ouvre `index.html` dans un navigateur (aucun serveur nécessaire).
 
-- **Survivre jusqu'à 6 AM** en surveillant les caméras, en fermant les portes et en utilisant les lumières.
-- La **batterie** se vide en permanence (plus vite avec portes fermées, lumières et caméras allumées). À 0 %, tout s'éteint...
+L'écran des **caméras (C)** affiche une **carte du musée** : chaque salle est placée comme sur un plan, les emojis montrent la position des statues en direct, et un ⚠️ rouge clignotant signale une statue à une porte.
+
+- **Survivre jusqu'à 6 AM** en surveillant la carte des caméras, en fermant les portes et en utilisant les lumières.
+- La **batterie** se vide en permanence (plus vite avec portes fermées, lumières, caméras et chauffage). À 0 %, tout s'éteint...
 - Si une statue atteint une porte et que celle-ci est ouverte, c'est le jumpscare.
+- Le HUD affiche la batterie ⚡, l'heure avec la progression 12→6 h, et un bandeau ⚠️ quand une statue est à une porte.
 
 ### Contrôles
 
@@ -29,7 +32,7 @@ Ouvre `index.html` dans un navigateur (aucun serveur nécessaire).
 | A | Porte gauche |
 | Z | Lumière gauche |
 | C (ou Espace) | Monter/baisser les caméras |
-| 1-7 | Changer de caméra (caméras levées) |
+| 1-7 (ou clic sur la carte) | Changer de caméra |
 | E | Lumière droite |
 | D | Porte droite |
 | R / F | Chauffage + / − (ralentit la cire, coûte de la batterie) |
